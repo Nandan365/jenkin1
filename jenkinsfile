@@ -1,131 +1,32 @@
 pipeline {
-  agent { label 'Agent' }
-
-  tools {
-    jdk 'Java17'
-    maven 'Maven3'
-  }
-
-  environment {
-    // Git
-    GIT_REPO = 'https://github.com/Nandan365/Devops.git'
-
-    // SonarQube
-    SONAR_HOST_URL = 'http://<your-sonarqube-host>:9000'   // e.g. http://sonarqube:9000
-    SONAR_PROJECT_KEY = 'devops-demo'                      // change if needed
-
-    // Artifactory (Maven deploy)
-    // No URL here; POM distributionManagement holds URLs.
-    // We’ll inject credentials via a generated settings.xml.
-
-    // Docker + AWS ECR
-    AWS_REGION     = 'us-east-1'
-    AWS_ACCOUNT_ID = '660376548872'
-    ECR_REPO_NAME  = 'devopsnandan'
-    IMAGE_TAG      = "${BUILD_NUMBER}"   // or "latest"
-    IMAGE_URI      = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}"
-
-    // Ensure aws cli is reachable
-    PATH = "/usr/local/bin:${PATH}"
-  }
-
-  stages {
-
-    stage('Cleanup Workspace') {
-      steps { cleanWs() }
+    agent { label 'Agent' }
+    tools {
+        jdk 'Java17'
+        maven 'Maven3'
     }
-
-    stage('Checkout') {
-      steps {
-        git branch: 'main', credentialsId: 'github', url: "${GIT_REPO}"
-      }
-    }
-
-    stage('Build & Unit Test') {
-      steps {
-        sh 'mvn -B -DskipTests=false clean verify'
-        // JAR expected at target/*.jar
-      }
-    }
-
-    stage('SonarQube Analysis') {
-      steps {
-        withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-          sh """
-            mvn -B sonar:sonar \
-              -DskipTests \
-              -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-              -Dsonar.host.url=${SONAR_HOST_URL} \
-              -Dsonar.login=${SONAR_TOKEN}
-          """
+    stages{
+        stage("Cleanup Workspace"){
+                steps {
+                cleanWs()
+                }
         }
+
+      stage("Checkout from SCM"){
+              steps {
+              git branch: 'main', credentialsId: 'github', url: 'https://github.com/Nandan365/Devops.git'
+              }
+      }
+
+      stage("Build Application"){
+          steps {
+              sh "mvn clean package"
+          }
+      }
+
+      stage("Test Application"){
+          steps {
+                sh "mvn test"
+          }
       }
     }
-
-    // OPTIONAL (requires SonarQube Jenkins plugin + webhook configured):
-    // stage('Quality Gate') {
-    //   steps {
-    //     timeout(time: 10, unit: 'MINUTES') {
-    //       waitForQualityGate abortPipeline: true
-    //     }
-    //   }
-    // }
-
-    stage('Publish to Artifactory (Maven deploy)') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: 'artifactory-creds', usernameVariable: 'ART_USER', passwordVariable: 'ART_PASS')]) {
-          sh """
-            cat > settings.xml <<EOF
-            <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
-                      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                      xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
-              <servers>
-                <server>
-                  <id>artifactory</id>
-                  <username>${ART_USER}</username>
-                  <password>${ART_PASS}</password>
-                </server>
-              </servers>
-            </settings>
-            EOF
-
-            mvn -B -s settings.xml -DskipTests=true deploy
-          """
-        }
-      }
-    }
-
-    stage('Login to AWS ECR') {
-      steps {
-        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-          sh """
-            echo "Logging into AWS ECR..."
-            aws ecr get-login-password --region ${AWS_REGION} \
-              | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-          """
-        }
-      }
-    }
-
-    stage('Build Docker Image') {
-      steps {
-        sh """
-          docker build -t ${IMAGE_URI} .
-        """
-      }
-    }
-
-    stage('Push Docker Image') {
-      steps {
-        sh "docker push ${IMAGE_URI}"
-      }
-    }
-  }
-
-  post {
-    always {
-      archiveArtifacts artifacts: 'target/*.jar', fingerprint: true, onlyIfSuccessful: false
-      junit allowEmptyResults: true, testResults: '**/surefire-reports/*.xml'
-    }
-  }
 }
